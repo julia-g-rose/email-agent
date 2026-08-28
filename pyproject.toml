@@ -1,0 +1,24 @@
+[project]
+name = "email-agent"
+version = "0.1.0"
+description = "Email-research agent (ART·E-style) — RL fine-tune an open-source model to match a closed-model baseline."
+requires-python = ">=3.11"
+dependencies = [
+    "openpipe-art==0.5.9",
+    "langchain-core",
+    "tenacity",
+    "datasets",
+    "openai>=1.40",
+    "litellm",
+    "weave>=0.51",
+    "pydantic>=2",
+    "python-dotenv",
+    "tqdm",
+]
+
+[tool.setuptools]
+packages = ["email_agent"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
