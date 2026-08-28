@@ -16,16 +16,23 @@ from __future__ import annotations
 import asyncio
 import os
 
+import weave
 from openai import AsyncOpenAI
 
 from email_agent.agent import run_agent
 from email_agent.data import load_scenarios
+
+WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "email-search-agent")
 
 BASELINE_MODEL = os.environ.get("BASELINE_MODEL", "gpt-4o")
 N_VALIDATION = int(os.environ.get("N_VALIDATION", "20"))
 
 
 async def main() -> None:
+    # Agent Pulse tracing: every agent + judge call is captured in Weave
+    # (inputs, outputs, latency, cost) so the baseline model's spend is visible.
+    weave.init(WANDB_PROJECT)
+
     scenarios = load_scenarios(split="test", limit=N_VALIDATION, max_messages=1, shuffle=True, seed=42)
     client = AsyncOpenAI()  # reads OPENAI_API_KEY; talks to OpenAI directly
 

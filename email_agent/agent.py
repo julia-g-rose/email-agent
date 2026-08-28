@@ -94,6 +94,7 @@ def _build_tools(scenario: Scenario):
     return tools_by_name, openai_tools
 
 
+@weave.op
 async def run_agent(
     scenario: Scenario,
     *,
