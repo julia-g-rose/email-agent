@@ -14,6 +14,7 @@ from dataclasses import asdict
 from textwrap import dedent
 
 import art
+import weave
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from litellm import acompletion
 from openai import AsyncOpenAI
@@ -42,6 +43,7 @@ class CorrectnessJudgeResponse(BaseModel):
     accept: bool = Field(description="Whether the AI answer should be accepted.")
 
 
+@weave.op
 @retry(stop=stop_after_attempt(3))
 async def judge_correctness(scenario: Scenario, answer: str) -> CorrectnessJudgeResponse:
     """LLM judge: does the AI answer contain the reference answer's relevant info?"""
@@ -93,6 +95,7 @@ def _build_tools(scenario: Scenario):
     return tools_by_name, openai_tools
 
 
+@weave.op
 async def run_agent(
     scenario: Scenario,
     *,
@@ -165,6 +168,7 @@ async def run_agent(
     return traj
 
 
+@weave.op
 async def rollout(model: art.Model, email_scenario: EmailScenario) -> ProjectTrajectory:
     """ART rollout: run the agent against the trainable model's inference endpoint."""
     client = AsyncOpenAI(
