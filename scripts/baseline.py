@@ -42,9 +42,13 @@ async def main() -> None:
     print(f"\nRunning the email agent on the closed baseline model: {BASELINE_MODEL}")
     print(f"Evaluating on {len(scenarios)} held-out questions...\n")
 
-    results = await asyncio.gather(
-        *(run_agent(s, client=client, model_name=BASELINE_MODEL) for s in scenarios)
-    )
+    async def run_episode(s):
+        # One Weave thread per question, so each run shows up as its own agent
+        # "conversation" in Agent Pulse (not just a flat trace).
+        with weave.thread(f"email-agent-{s.id}"):
+            return await run_agent(s, client=client, model_name=BASELINE_MODEL)
+
+    results = await asyncio.gather(*(run_episode(s) for s in scenarios))
     correct = [t.metrics.get("correct", 0.0) for t in results]
     accuracy = sum(correct) / len(correct) if correct else 0.0
 
