@@ -1,0 +1,10 @@
+.env
+enron_emails.db
+*.db
+__pycache__/
+*.pyc
+.venv/
+.python-version.local
+.ipynb_checkpoints/
+wandb/
+.art/
