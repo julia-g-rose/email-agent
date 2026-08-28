@@ -14,6 +14,7 @@ from dataclasses import asdict
 from textwrap import dedent
 
 import art
+import weave
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from litellm import acompletion
 from openai import AsyncOpenAI
@@ -26,6 +27,8 @@ from email_agent.data import FinalAnswer, Scenario, read_email, search_emails
 MAX_TURNS = int(os.environ.get("MAX_TURNS", "6"))
 # Judge used for per-answer correctness (0/1 metric). Configurable; OpenAI-compatible.
 JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "openai/gpt-4o-mini")
+# Display name for the agent in Agent Pulse (Agents -> Conversations).
+AGENT_NAME = "Email Research Agent"
 
 
 class ProjectTrajectory(art.Trajectory):
@@ -42,6 +45,7 @@ class CorrectnessJudgeResponse(BaseModel):
     accept: bool = Field(description="Whether the AI answer should be accepted.")
 
 
+@weave.op
 @retry(stop=stop_after_attempt(3))
 async def judge_correctness(scenario: Scenario, answer: str) -> CorrectnessJudgeResponse:
     """LLM judge: does the AI answer contain the reference answer's relevant info?"""
@@ -93,6 +97,7 @@ def _build_tools(scenario: Scenario):
     return tools_by_name, openai_tools
 
 
+@weave.op
 async def run_agent(
     scenario: Scenario,
     *,
@@ -124,47 +129,95 @@ async def run_agent(
     tools_by_name, openai_tools = _build_tools(scenario)
     traj.tools = openai_tools
 
-    for _ in range(MAX_TURNS):
-        response = await client.chat.completions.create(
+    # Agent Pulse: each episode is one Weave conversation with a single turn, so it
+    # shows up under Agents -> Conversations (model calls, tool calls, and cost per
+    # run), not just the raw Traces table. Uses the Weave Conversation SDK, which
+    # emits the GenAI spans the Agents view is built on.
+    with weave.start_conversation(
+        agent_name=AGENT_NAME,
+        conversation_id=f"email-agent-{scenario.id}-{step}",
+        model=model_name,
+    ) as conversation:
+        turn = conversation.start_turn(
+            user_message=scenario.question,
+            agent_name=AGENT_NAME,
             model=model_name,
-            temperature=temperature,
-            messages=traj.messages(),
-            tools=traj.tools,
+            system_instructions=[system_prompt],
         )
-        response_message = response.choices[0].message
-        traj.messages_and_choices.append(response.choices[0])
+        with turn:
+            for _ in range(MAX_TURNS):
+                with turn.start_llm(model=model_name) as llm:
+                    response = await client.chat.completions.create(
+                        model=model_name,
+                        temperature=temperature,
+                        messages=traj.messages(),
+                        tools=traj.tools,
+                    )
+                    response_message = response.choices[0].message
+                    usage = response.usage
+                    llm.record(
+                        output_messages=[
+                            weave.Message(role="assistant", content=response_message.content or "")
+                        ],
+                        usage=weave.Usage(
+                            input_tokens=usage.prompt_tokens,
+                            output_tokens=usage.completion_tokens,
+                        )
+                        if usage
+                        else None,
+                        response_model=response.model,
+                    )
+                traj.messages_and_choices.append(response.choices[0])
 
-        if not response_message.tool_calls:
-            return traj
-
-        try:
-            for tool_call in response_message.tool_calls:
-                tool_name = tool_call.function.name
-                if tool_name not in tools_by_name:
-                    continue
-                tool_args = json.loads(tool_call.function.arguments)
-                result = tools_by_name[tool_name](**tool_args)
-                traj.messages_and_choices.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "name": tool_name,
-                        "content": str(result),
-                    }
-                )
-                if tool_name == "return_final_answer":
-                    traj.final_answer = result
-                    if judge and traj.final_answer:
-                        judged = await judge_correctness(scenario, traj.final_answer.answer)
-                        traj.metrics["correct"] = float(judged.accept)
+                if not response_message.tool_calls:
+                    turn.record(
+                        output_messages=[
+                            weave.Message(role="assistant", content=response_message.content or "")
+                        ]
+                    )
                     return traj
-        except Exception as e:  # noqa: BLE001
-            print(f"Error executing tool call: {e}")
-            return traj
+
+                try:
+                    for tool_call in response_message.tool_calls:
+                        tool_name = tool_call.function.name
+                        if tool_name not in tools_by_name:
+                            continue
+                        tool_args = json.loads(tool_call.function.arguments)
+                        with turn.start_tool(
+                            name=tool_name,
+                            arguments=tool_call.function.arguments,
+                            tool_call_id=tool_call.id,
+                        ) as tool_span:
+                            result = tools_by_name[tool_name](**tool_args)
+                            tool_span.result = str(result)
+                        traj.messages_and_choices.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": tool_name,
+                                "content": str(result),
+                            }
+                        )
+                        if tool_name == "return_final_answer":
+                            traj.final_answer = result
+                            turn.record(
+                                output_messages=[
+                                    weave.Message(role="assistant", content=result.answer)
+                                ]
+                            )
+                            if judge and traj.final_answer:
+                                judged = await judge_correctness(scenario, traj.final_answer.answer)
+                                traj.metrics["correct"] = float(judged.accept)
+                            return traj
+                except Exception as e:  # noqa: BLE001
+                    turn.record_error(e)
+                    print(f"Error executing tool call: {e}")
+                    return traj
 
     return traj
 
 
+@weave.op
 async def rollout(model: art.Model, email_scenario: EmailScenario) -> ProjectTrajectory:
     """ART rollout: run the agent against the trainable model's inference endpoint."""
     client = AsyncOpenAI(

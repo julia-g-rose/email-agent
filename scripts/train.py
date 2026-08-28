@@ -15,12 +15,15 @@ Env:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import random
 
 import art
+import weave
 from art.serverless.backend import ServerlessBackend
 from art.utils import iterate_dataset
+from art.utils.strip_logprobs import strip_logprobs
 from dotenv import load_dotenv
 
 from email_agent.agent import EmailScenario, rollout
@@ -46,6 +49,7 @@ TRAINING_CONFIG = {
 async def main() -> None:
     load_dotenv()
     random.seed(42)
+    logging.getLogger("weave").setLevel(logging.CRITICAL)
 
     training_scenarios = load_scenarios(
         split="train", limit=TRAINING_SCENARIO_LIMIT, max_messages=1, shuffle=True, seed=42
@@ -58,6 +62,10 @@ async def main() -> None:
     model = art.TrainableModel(name="email-agent-001", project=PROJECT, base_model=BASE_MODEL)
     backend = ServerlessBackend()
     await model.register(backend)
+
+    # RL rollouts run the same @weave.op agent loop, so trajectories are traced too.
+    # strip_logprobs keeps the large per-token logprob arrays out of the Weave payloads.
+    weave.init(model.project, settings={"print_call_link": False}, global_postprocess_output=strip_logprobs)
 
     training_iterator = iterate_dataset(
         training_scenarios,

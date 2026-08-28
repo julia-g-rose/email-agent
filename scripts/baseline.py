@@ -16,16 +16,26 @@ from __future__ import annotations
 import asyncio
 import os
 
+import weave
 from openai import AsyncOpenAI
 
 from email_agent.agent import run_agent
 from email_agent.data import load_scenarios
+
+# Project the Agent Pulse traces land in (entity/project). Override with WANDB_PROJECT.
+WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "wb-agent-team/email-agent")
 
 BASELINE_MODEL = os.environ.get("BASELINE_MODEL", "gpt-4o")
 N_VALIDATION = int(os.environ.get("N_VALIDATION", "20"))
 
 
 async def main() -> None:
+    # Agent Pulse tracing: after weave.init, every OpenAI call in the agent loop is
+    # captured automatically (prompt, response, tokens, latency, cost), and the
+    # @weave.op agent + judge functions give the per-episode call tree on top. This
+    # is what makes the baseline model's behavior and spend visible in Weave.
+    weave.init(WANDB_PROJECT)
+
     scenarios = load_scenarios(split="test", limit=N_VALIDATION, max_messages=1, shuffle=True, seed=42)
     client = AsyncOpenAI()  # reads OPENAI_API_KEY; talks to OpenAI directly
 
