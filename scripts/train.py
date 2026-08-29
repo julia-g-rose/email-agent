@@ -30,20 +30,45 @@ from email_agent.agent import EmailScenario, rollout
 from email_agent.data import load_scenarios
 from email_agent.rewards import RULER_MODEL, ruler_score_group
 
-BASE_MODEL = os.environ.get("BASE_MODEL", "Qwen/Qwen3.6-27B")
-PROJECT = os.environ.get("WANDB_PROJECT", "email-search-agent")
+BASE_MODEL = os.environ.get("BASE_MODEL", "OpenPipe/Qwen3-14B-Instruct")
+MODEL_NAME = os.environ.get("MODEL_NAME", "email-agent-14b")
+PROJECT = os.environ.get("WANDB_PROJECT", "email-agent")
+ENTITY = os.environ.get("WANDB_ENTITY", "wb-agent-team")
 
 TRAINING_SCENARIO_LIMIT = int(os.environ.get("TRAIN_LIMIT", "720"))
 VALIDATION_SCENARIO_LIMIT = int(os.environ.get("VAL_LIMIT", "20"))
 
 TRAINING_CONFIG = {
-    "groups_per_step": 12,
-    "num_epochs": 20,
-    "trajectories_per_group": 4,
-    "learning_rate": 1.2e-5,
-    "max_steps": 60,
-    "validation_step_interval": 10,
+    "groups_per_step": int(os.environ.get("GROUPS_PER_STEP", "12")),
+    "num_epochs": int(os.environ.get("NUM_EPOCHS", "20")),
+    "trajectories_per_group": int(os.environ.get("TRAJ_PER_GROUP", "4")),
+    "learning_rate": float(os.environ.get("LEARNING_RATE", "1.2e-5")),
+    "max_steps": int(os.environ.get("MAX_STEPS", "60")),
+    "validation_step_interval": int(os.environ.get("VAL_INTERVAL", "10")),
 }
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _log_code(model: art.TrainableModel) -> bool:
+    """Attach the repo source to the run's Code tab so it's inspectable from the run.
+
+    Returns True once the code has been logged (the wandb run exists by then).
+    """
+    run = model._get_wandb_run()
+    if run is None:
+        return False
+    run.log_code(
+        root=REPO_ROOT,
+        include_fn=lambda p, r=None: (
+            "/.venv/" not in p
+            and "/wandb/" not in p
+            and "/artifacts/" not in p
+            and not p.endswith(".db")
+            and (p.endswith((".py", ".toml", ".md")) or p.endswith(".env.example"))
+        ),
+    )
+    return True
 
 
 async def main() -> None:
@@ -59,13 +84,13 @@ async def main() -> None:
     )
     print(f"{len(training_scenarios)} training / {len(validation_scenarios)} validation scenarios")
 
-    model = art.TrainableModel(name="email-agent-001", project=PROJECT, base_model=BASE_MODEL)
+    model = art.TrainableModel(name=MODEL_NAME, project=PROJECT, entity=ENTITY, base_model=BASE_MODEL)
     backend = ServerlessBackend()
     await model.register(backend)
 
     # RL rollouts run the same @weave.op agent loop, so trajectories are traced too.
     # strip_logprobs keeps the large per-token logprob arrays out of the Weave payloads.
-    weave.init(model.project, settings={"print_call_link": False}, global_postprocess_output=strip_logprobs)
+    weave.init(f"{model.entity}/{model.project}", settings={"print_call_link": False}, global_postprocess_output=strip_logprobs)
 
     training_iterator = iterate_dataset(
         training_scenarios,
@@ -74,6 +99,7 @@ async def main() -> None:
         initial_step=await model.get_step(),
     )
 
+    code_logged = _log_code(model)
     for batch in training_iterator:
         print(f"Step {batch.step}, epoch {batch.epoch}, epoch step {batch.epoch_step} — {len(batch.items)} scenarios")
 
@@ -109,6 +135,8 @@ async def main() -> None:
             model, judged_groups, learning_rate=TRAINING_CONFIG["learning_rate"]
         )
         await model.log(judged_groups, metrics=train_result.metrics, step=train_result.step, split="train")
+        if not code_logged:
+            code_logged = _log_code(model)
         await model.delete_checkpoints("val/correct")
 
         print(f"Completed training step {train_result.step}")

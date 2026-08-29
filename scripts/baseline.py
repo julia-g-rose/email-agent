@@ -25,7 +25,7 @@ from email_agent.data import load_scenarios
 # Project the Agent Pulse traces land in (entity/project). Override with WANDB_PROJECT.
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "wb-agent-team/email-agent")
 
-BASELINE_MODEL = os.environ.get("BASELINE_MODEL", "gpt-4o")
+BASELINE_MODEL = os.environ.get("BASELINE_MODEL", "gpt-4.1-mini")
 N_VALIDATION = int(os.environ.get("N_VALIDATION", "20"))
 
 

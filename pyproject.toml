@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Email-research agent (ART·E-style) — RL fine-tune an open-source model to match a closed-model baseline."
 requires-python = ">=3.11"
 dependencies = [
-    "openpipe-art==0.5.9",
+    "openpipe-art==0.5.18",
     "langchain-core",
     "tenacity",
     "datasets",

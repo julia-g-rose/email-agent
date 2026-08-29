@@ -14,6 +14,7 @@ from dataclasses import asdict
 from textwrap import dedent
 
 import art
+import httpx
 import weave
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from litellm import acompletion
@@ -106,8 +107,13 @@ async def run_agent(
     step: int = 0,
     judge: bool = True,
     temperature: float = 1.0,
+    extra_body: dict | None = None,
 ) -> ProjectTrajectory:
-    """Run the email agent for one scenario against any OpenAI-compatible endpoint."""
+    """Run the email agent for one scenario against any OpenAI-compatible endpoint.
+
+    `extra_body` is passed through to the chat-completions call; RL rollouts use it to
+    ask the vLLM training endpoint for token ids (needed to compute the RL gradient).
+    """
     traj = ProjectTrajectory(
         reward=0.0,
         messages_and_choices=[],
@@ -152,7 +158,19 @@ async def run_agent(
                         temperature=temperature,
                         messages=traj.messages(),
                         tools=traj.tools,
+                        extra_body=extra_body,
                     )
+                    # RL training needs both token_ids (per-choice, attached by the SDK)
+                    # and prompt_token_ids on each choice. vLLM returns prompt_token_ids
+                    # once at the top level, so copy it down onto each choice — otherwise
+                    # the trainer rejects the trajectory ("missing vLLM prompt_token_ids").
+                    prompt_token_ids = (getattr(response, "model_extra", None) or {}).get(
+                        "prompt_token_ids"
+                    )
+                    if prompt_token_ids is not None:
+                        for _choice in response.choices:
+                            if _choice.model_extra is not None:
+                                _choice.model_extra.setdefault("prompt_token_ids", prompt_token_ids)
                     response_message = response.choices[0].message
                     usage = response.usage
                     llm.record(
@@ -217,16 +235,53 @@ async def run_agent(
     return traj
 
 
+_ROLLOUT_CLIENTS: dict[int, AsyncOpenAI] = {}
+
+
+def _rollout_client(model: art.TrainableModel) -> AsyncOpenAI:
+    """ART's managed inference client, but with a widened connect timeout.
+
+    `model.openai_client()` is what captures the vLLM token ids the trainer needs, but
+    its 5s connect timeout fails en masse under concurrent rollouts — every request in a
+    batch times out connecting, leaving empty trajectory groups the trainer can't learn
+    from. `with_options` keeps the token-id behavior and just relaxes the timeout.
+    """
+    key = id(model)
+    if key not in _ROLLOUT_CLIENTS:
+        # A plain reliable client with a generous connect timeout and no retries. ART's
+        # own `model.openai_client()` uses a 5s connect timeout that fails under
+        # concurrent rollouts, and openai 3.x's retry path then raises a `float + Timeout`
+        # bug — killing every rollout. We request the token ids and copy prompt_token_ids
+        # onto each choice ourselves (see run_agent), so we don't need ART's client.
+        _ROLLOUT_CLIENTS[key] = AsyncOpenAI(
+            base_url=model.inference_base_url,
+            api_key=model.inference_api_key,
+            max_retries=0,
+            http_client=httpx.AsyncClient(
+                timeout=httpx.Timeout(1200.0, connect=30.0),
+                limits=httpx.Limits(max_connections=64, max_keepalive_connections=64),
+            ),
+        )
+    return _ROLLOUT_CLIENTS[key]
+
+
 @weave.op
-async def rollout(model: art.Model, email_scenario: EmailScenario) -> ProjectTrajectory:
-    """ART rollout: run the agent against the trainable model's inference endpoint."""
-    client = AsyncOpenAI(
-        base_url=model.inference_base_url,
-        api_key=model.inference_api_key,
-    )
+async def rollout(model: art.TrainableModel, email_scenario: EmailScenario) -> ProjectTrajectory:
+    """ART rollout: run the agent against the trainable model's inference endpoint.
+
+    Asks the vLLM endpoint to return token ids so each assistant choice carries the ids
+    the RL trainer needs (run_agent copies the top-level prompt_token_ids onto each
+    choice). preserve_thinking keeps the model's reasoning tokens in the trajectory.
+    """
+    extra_body: dict = {
+        "return_token_ids": True,
+        "return_tokens_as_token_ids": True,
+        "chat_template_kwargs": {"preserve_thinking": True},
+    }
     return await run_agent(
         email_scenario.scenario,
-        client=client,
+        client=_rollout_client(model),
         model_name=model.get_inference_name(),
         step=email_scenario.step,
+        extra_body=extra_body,
     )
