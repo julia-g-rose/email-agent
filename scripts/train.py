@@ -49,6 +49,52 @@ TRAINING_CONFIG = {
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Reference bars for the eval table (measured separately, temp=0, N=50).
+BASELINE_MODEL = os.environ.get("BASELINE_MODEL", "gpt-4.1-mini")
+BASELINE_ACCURACY = float(os.environ.get("BASELINE_ACCURACY", "0.84"))
+UNTRAINED_ACCURACY = float(os.environ.get("UNTRAINED_ACCURACY", "0.62"))
+
+
+def _log_eval_table(model, scenarios, finished_val, step) -> None:
+    """Log a typed EvalTable (inputs / outputs / scores) at this validation step.
+
+    Uses `wandb.EvalTable` so the results route to the Evaluation Tables compare panel:
+    inputs = the question + reference, output = the agent's answer, score = correctness.
+    Logged once per validation loop, so each training step is selectable in the panel's
+    native step dimension. Also logs trained accuracy against the fixed baseline bars.
+    """
+    run = model._get_wandb_run()
+    if run is None:
+        return
+    import wandb
+
+    rows = []  # ordered input -> output -> score
+    correct = 0.0
+    n = 0
+    for scenario, group in zip(scenarios, finished_val):
+        traj = group.trajectories[0] if getattr(group, "trajectories", None) else None
+        answer = traj.final_answer.answer if (traj and traj.final_answer) else ""
+        is_correct = float(traj.metrics.get("correct", 0.0)) if traj else 0.0
+        correct += is_correct
+        n += 1
+        rows.append([scenario.id, scenario.question, scenario.answer, answer, is_correct])
+    accuracy = correct / n if n else 0.0
+
+    eval_table = wandb.EvalTable(
+        input_columns=["scenario_id", "question", "reference_answer"],
+        output_columns=["model_answer"],
+        score_columns=["correct"],
+        data=rows,
+    )
+    run.log(
+        {
+            "eval": eval_table,
+            "eval/trained_accuracy": accuracy,
+            "eval/baseline_accuracy": BASELINE_ACCURACY,  # gpt-4.1-mini bar
+            "eval/untrained_accuracy": UNTRAINED_ACCURACY,  # 14B starting point
+        }
+    )
+
 
 def _log_code(model: art.TrainableModel) -> bool:
     """Attach the repo source to the run's Code tab so it's inspectable from the run.
@@ -130,6 +176,7 @@ async def main() -> None:
                 max_exceptions=TRAINING_CONFIG["trajectories_per_group"] * len(validation_scenarios),
             )
             await model.log(finished_val, split="val")
+            _log_eval_table(model, validation_scenarios, finished_val, batch.step)
 
         train_result = await backend.train(
             model, judged_groups, learning_rate=TRAINING_CONFIG["learning_rate"]
