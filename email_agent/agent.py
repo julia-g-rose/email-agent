@@ -228,6 +228,11 @@ async def run_agent(
                         )
                         if tool_name == "return_final_answer":
                             traj.final_answer = result
+                            # Also stash the cited ids in metadata: RULER's
+                            # ruler_score_group rebuilds trajectories and drops
+                            # custom subclass fields like final_answer, so the
+                            # reward reads predicted ids from metadata instead.
+                            traj.metadata["source_message_ids"] = ",".join(result.source_ids)
                             turn.record(
                                 output_messages=[
                                     weave.Message(role="assistant", content=result.answer)

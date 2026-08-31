@@ -38,7 +38,9 @@ async def hybrid_score_group(group: art.TrajectoryGroup, model: str, debug: bool
         ruler = max(0.0, min(1.0, float(traj.reward)))
         correct = float(traj.metrics.get("correct", 0.0))
         expected = [s for s in str(traj.metadata.get("reference_message_ids", "")).split(",") if s]
-        predicted = list(traj.final_answer.source_ids) if traj.final_answer else []
+        # Read predicted ids from metadata, not traj.final_answer: RULER rebuilds
+        # trajectories and drops custom subclass fields, so final_answer is None here.
+        predicted = [s for s in str(traj.metadata.get("source_message_ids", "")).split(",") if s]
         citation_f1 = source_f1(predicted, expected)
         traj.reward = (
             CORRECT_WEIGHT * correct
