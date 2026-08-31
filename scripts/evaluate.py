@@ -11,7 +11,7 @@ Usage (from repo root):
 Env:
     MODEL_REF        served model / artifact ref to evaluate (required)
     INFERENCE_BASE   OpenAI-compatible base URL (default: https://api.training.wandb.ai/v1)
-    N_VALIDATION     number of validation scenarios (default: 20)
+    N_VALIDATION     number of validation scenarios (default: 30)
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from email_agent.data import load_scenarios
 
 MODEL_REF = os.environ.get("MODEL_REF")
 INFERENCE_BASE = os.environ.get("INFERENCE_BASE", "https://api.training.wandb.ai/v1")
-N_VALIDATION = int(os.environ.get("N_VALIDATION", "20"))
+N_VALIDATION = int(os.environ.get("N_VALIDATION", "30"))
 
 
 async def main() -> None:

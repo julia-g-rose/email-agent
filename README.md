@@ -15,7 +15,7 @@ the closed baseline — at a fraction of the inference cost.
 |---|---|
 | Email environment — Enron dataset → SQLite + FTS5, `search_emails` / `read_email`, scenarios | `email_agent/data.py` |
 | The agent — multi-turn tool-use loop + LLM correctness judge (`run_agent`, `rollout`) | `email_agent/agent.py` |
-| Reward — RULER relative scoring of trajectory groups | `email_agent/rewards.py` |
+| Reward — 70% exact correctness, 20% cited-source F1, 10% RULER | `email_agent/rewards.py` |
 | **Baseline** — run the agent on the closed OpenAI model, measure accuracy | `scripts/baseline.py` |
 | **Train** — RL fine-tune an open-source base with ART + RULER on W&B Serverless | `scripts/train.py` |
 | **Evaluate** — score a fine-tuned checkpoint on the held-out set | `scripts/evaluate.py` |
@@ -52,6 +52,27 @@ MODEL_REF="wandb-artifact:///ENTITY/PROJECT/email-agent-001:step60" \
 
 Config knobs (env): `BASELINE_MODEL`, `BASE_MODEL`, `JUDGE_MODEL`, `RULER_MODEL`,
 `N_VALIDATION`, `MAX_TURNS` — see `.env.example`.
+
+## Recommended next experiment: hybrid reward v1
+
+The prior `email-agent-rl-v2` run optimized RULER alone: training reward rose while
+held-out correctness plateaued at 19/30. This trial makes the target metric dominant
+while retaining a citation-grounding signal and a small relative-quality term.
+
+```bash
+WANDB_ENTITY=wb-agent-team WANDB_PROJECT=email-agent \
+MODEL_NAME=email-agent-14b-hybrid-reward-v1 \
+BASE_MODEL=OpenPipe/Qwen3-14B-Instruct \
+REWARD_CORRECT_WEIGHT=0.70 REWARD_SOURCE_WEIGHT=0.20 REWARD_RULER_WEIGHT=0.10 \
+VAL_LIMIT=30 VAL_INTERVAL=5 EARLY_STOP_PATIENCE=2 MAX_STEPS=20 \
+uv run scripts/train.py
+```
+
+**Primary metric:** `eval/trained_accuracy` on the fixed 30-question, temperature-0
+held-out set. **Success:** at least 22/30 (parity with gpt-4.1-mini). **Promising:**
+at least 21/30 with no drop in `eval/source_f1`; otherwise revise the reward/data
+rather than extending training. The run also logs exact correct/sample counts and
+expected versus predicted source IDs so failures can be audited row by row.
 
 ## Reference
 

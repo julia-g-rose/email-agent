@@ -8,7 +8,7 @@ Usage (from repo root):
     OPENAI_API_KEY=... uv run scripts/baseline.py
 Env:
     BASELINE_MODEL   OpenAI model to run the agent on (default: gpt-4o)
-    N_VALIDATION     number of validation scenarios (default: 20)
+    N_VALIDATION     number of validation scenarios (default: 30)
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ from email_agent.data import load_scenarios
 # Project the Agent Pulse traces land in (entity/project). Override with WANDB_PROJECT.
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT", "wb-agent-team/email-agent")
 
-BASELINE_MODEL = os.environ.get("BASELINE_MODEL", "gpt-4o")
-N_VALIDATION = int(os.environ.get("N_VALIDATION", "20"))
+BASELINE_MODEL = os.environ.get("BASELINE_MODEL", "gpt-4.1-mini")
+N_VALIDATION = int(os.environ.get("N_VALIDATION", "30"))
 
 
 async def main() -> None:
