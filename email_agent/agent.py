@@ -33,6 +33,8 @@ AGENT_NAME = "Email Research Agent"
 
 class ProjectTrajectory(art.Trajectory):
     final_answer: FinalAnswer | None = None
+    judge_reasoning: str | None = None
+    judge_parse_error: bool = False
 
 
 class EmailScenario(BaseModel):
@@ -106,6 +108,7 @@ async def run_agent(
     step: int = 0,
     judge: bool = True,
     temperature: float = 1.0,
+    trace_label: str | None = None,
 ) -> ProjectTrajectory:
     """Run the email agent for one scenario against any OpenAI-compatible endpoint."""
     traj = ProjectTrajectory(
@@ -133,9 +136,12 @@ async def run_agent(
     # shows up under Agents -> Conversations (model calls, tool calls, and cost per
     # run), not just the raw Traces table. Uses the Weave Conversation SDK, which
     # emits the GenAI spans the Agents view is built on.
+    conversation_id = f"email-agent-{scenario.id}-{step}"
+    if trace_label:
+        conversation_id = f"{conversation_id}-{trace_label}"
     with weave.start_conversation(
         agent_name=AGENT_NAME,
-        conversation_id=f"email-agent-{scenario.id}-{step}",
+        conversation_id=conversation_id,
         model=model_name,
     ) as conversation:
         turn = conversation.start_turn(
@@ -208,6 +214,8 @@ async def run_agent(
                             if judge and traj.final_answer:
                                 judged = await judge_correctness(scenario, traj.final_answer.answer)
                                 traj.metrics["correct"] = float(judged.accept)
+                                traj.judge_reasoning = judged.reasoning
+                                traj.judge_parse_error = judged.reasoning.startswith("Parse error:")
                             return traj
                 except Exception as e:  # noqa: BLE001
                     turn.record_error(e)
